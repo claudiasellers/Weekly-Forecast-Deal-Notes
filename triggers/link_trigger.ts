@@ -22,6 +22,10 @@ const LinkTrigger: Trigger<typeof DealNotesWorkflow.definition> = {
     channel_id: {
       value: TriggerContextData.Shortcut.channel_id,
     },
+    google_access_token_id: {
+      value: "",
+      credential_source: "END_USER",
+    },
   },
 };
 

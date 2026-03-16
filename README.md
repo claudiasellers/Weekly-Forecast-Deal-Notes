@@ -100,17 +100,25 @@ const COL = {
 Column A = index 0, B = 1, C = 2, etc. Set any column to `-1` if it doesn't
 exist in the sheet (the field will render blank in the canvas for leaders to fill).
 
-### 3. Create a Google Cloud service account
+### 3. Create Google OAuth2 credentials
 
-1. Go to https://console.cloud.google.com
-2. Create a project (or use an existing one)
-3. Enable the **Google Sheets API**
-4. Go to **IAM & Admin → Service Accounts → Create Service Account**
-5. Give it a name like `slack-deal-notes`
-6. Create a **JSON key** — download the file
-7. **Share your Google Sheet** with the service account email
-   (e.g. `slack-deal-notes@your-project.iam.gserviceaccount.com`)
-   as a Viewer
+Since your org blocks service account keys, we use Slack's built-in OAuth2
+system instead. You sign in with your Google account and Slack handles
+token storage and refresh.
+
+1. Go to https://console.cloud.google.com → **APIs & Services → Credentials**
+2. Click **"+ CREATE CREDENTIALS"** → **"OAuth client ID"**
+3. If prompted, configure the OAuth consent screen first:
+   - User type: **Internal** (if using Google Workspace) or External
+   - App name: "Slack Deal Notes"
+   - Add scope: `https://www.googleapis.com/auth/spreadsheets.readonly`
+4. Back in Credentials, create the OAuth client ID:
+   - Application type: **Web application**
+   - Name: "Slack Deal Notes"
+   - Authorized redirect URIs: **`https://oauth2.slack.com/external/auth/callback`**
+5. Copy the **Client ID** and **Client Secret**
+6. Paste the **Client ID** into `external_auth/google_provider.ts` replacing
+   `YOUR_GOOGLE_CLIENT_ID_HERE.apps.googleusercontent.com`
 
 ### 4. Deploy to Slack
 
@@ -121,9 +129,25 @@ slack login
 # Deploy the app
 slack deploy
 
-# Add the service account credentials as an environment variable
-# Paste the ENTIRE contents of your service account JSON file when prompted
-slack env add GOOGLE_SERVICE_ACCOUNT_JSON
+# Add the Google OAuth2 client secret
+slack external-auth add-secret
+
+# When prompted:
+#   - Select provider: google
+#   - Paste your Client Secret
+
+# Connect your Google account
+slack external-auth add
+
+# When prompted:
+#   - Select provider: google
+#   - A browser window opens → sign in with the Google account
+#     that has access to the spreadsheet
+#   - You'll see "Account successfully connected"
+
+# Verify it worked
+slack external-auth add
+# You should see "Token Exists? Yes"
 
 # Create the scheduled trigger
 slack trigger create --trigger-def triggers/scheduled_trigger.ts
@@ -134,6 +158,12 @@ slack trigger create --trigger-def triggers/link_trigger.ts
 
 The link trigger will output a URL — paste it into your channel bookmarks
 bar or pin it as a message for easy access.
+
+**Note on triggers and auth:**
+- **Link trigger** uses `END_USER` auth — the person who clicks it will be
+  prompted to connect their Google account (one-time setup).
+- **Scheduled trigger** uses `DEVELOPER` auth — it uses the Google account
+  you connected via `slack external-auth add` above.
 
 ### 5. Test it
 

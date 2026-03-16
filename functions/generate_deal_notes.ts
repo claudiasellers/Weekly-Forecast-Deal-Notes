@@ -1,4 +1,5 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
+import GoogleProvider from "../external_auth/google_provider.ts";
 
 // ---------------------------------------------------------------------------
 // Function definition
@@ -23,8 +24,13 @@ export const GenerateDealNotesFunction = DefineFunction({
         type: Schema.types.string,
         description: "Tab/sheet name to read from (e.g. 'Top Deals - Leader Inputs Needed')",
       },
+      google_access_token_id: {
+        type: Schema.slack.types.oauth2,
+        oauth2_provider_key: "google",
+        description: "Google OAuth2 token for Sheets access",
+      },
     },
-    required: ["channel_id", "spreadsheet_id", "sheet_name"],
+    required: ["channel_id", "spreadsheet_id", "sheet_name", "google_access_token_id"],
   },
   output_parameters: {
     properties: {
@@ -72,76 +78,6 @@ interface DealSection {
 // ---------------------------------------------------------------------------
 // Google Sheets helpers
 // ---------------------------------------------------------------------------
-async function getAccessToken(serviceAccountJSON: string): Promise<string> {
-  const sa = JSON.parse(serviceAccountJSON);
-
-  // Build JWT header + claim set
-  const header = { alg: "RS256", typ: "JWT" };
-  const now = Math.floor(Date.now() / 1000);
-  const claimSet = {
-    iss: sa.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  };
-
-  const encode = (obj: unknown) =>
-    btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(
-      /=+$/,
-      "",
-    );
-
-  const headerB64 = encode(header);
-  const claimB64 = encode(claimSet);
-  const unsignedToken = `${headerB64}.${claimB64}`;
-
-  // Import the private key and sign
-  const pemBody = sa.private_key
-    .replace(/-----BEGIN PRIVATE KEY-----/, "")
-    .replace(/-----END PRIVATE KEY-----/, "")
-    .replace(/\s/g, "");
-  const keyData = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0));
-
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    keyData,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    new TextEncoder().encode(unsignedToken),
-  );
-
-  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-
-  const jwt = `${unsignedToken}.${sigB64}`;
-
-  // Exchange JWT for access token
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
-    }),
-  });
-
-  const tokenData = await tokenRes.json();
-  if (!tokenData.access_token) {
-    throw new Error(
-      `Failed to get access token: ${JSON.stringify(tokenData)}`,
-    );
-  }
-  return tokenData.access_token;
-}
 
 async function fetchSheetData(
   accessToken: string,
@@ -483,18 +419,21 @@ function buildCanvasMarkdown(
 // ---------------------------------------------------------------------------
 export default SlackFunction(
   GenerateDealNotesFunction,
-  async ({ inputs, client, env }) => {
+  async ({ inputs, client }) => {
     try {
-      // 1. Get Google access token from service account credentials
-      const serviceAccountJSON = env.GOOGLE_SERVICE_ACCOUNT_JSON;
-      if (!serviceAccountJSON) {
+      // 1. Get Google access token via Slack's external auth system
+      const auth = await client.apps.auth.external.get({
+        external_token_id: inputs.google_access_token_id,
+      });
+
+      if (!auth.ok) {
         return {
-          error:
-            "Missing GOOGLE_SERVICE_ACCOUNT_JSON environment variable. Add your service account credentials via `slack env add`.",
+          error: `Failed to get Google auth token: ${auth.error}. ` +
+            `Make sure you've completed the OAuth2 setup: slack external-auth add`,
         };
       }
 
-      const accessToken = await getAccessToken(serviceAccountJSON);
+      const accessToken = auth.external_token as string;
 
       // 2. Fetch sheet data
       const rows = await fetchSheetData(
