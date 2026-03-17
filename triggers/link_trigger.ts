@@ -18,13 +18,8 @@ const LinkTrigger: Trigger<typeof DealNotesWorkflow.definition> = {
     "Manually create this week's TMT Deal Notes canvas on demand",
   workflow: `#/workflows/${DealNotesWorkflow.definition.callback_id}`,
   inputs: {
-    // This uses the channel where the shortcut was invoked
     channel_id: {
       value: TriggerContextData.Shortcut.channel_id,
-    },
-    google_access_token_id: {
-      value: "",
-      credential_source: "END_USER",
     },
   },
 };

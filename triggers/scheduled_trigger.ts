@@ -25,10 +25,6 @@ const ScheduledTrigger: Trigger<typeof DealNotesWorkflow.definition> = {
     // │  e.g. "C0123456789"                                 │
     // └─────────────────────────────────────────────────────┘
     channel_id: { value: "C06K7BP34AD" },
-    google_access_token_id: {
-      value: "",
-      credential_source: "DEVELOPER",
-    },
   },
   schedule: {
     // First run — set to the next upcoming Thursday

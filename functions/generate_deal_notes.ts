@@ -495,16 +495,15 @@ export default SlackFunction(
         .map((s) => `${s.sectionName}: ${s.deals.length} deals`)
         .join(" · ");
 
-      await client.apiCall("chat.postMessage", {
-        channel: inputs.channel_id,
-        text: `:clipboard: *${canvasTitle}*\n\n${sectionSummary} · ${totalDeals} total deals\n\nCanvas is ready for leader input — please update your deal notes by EOD Thursday.`,
-        unfurl_links: true,
-      });
+      // Get workspace URL for canvas link
+      const teamInfo = await client.apiCall("auth.test", {});
+      const workspaceUrl = (teamInfo.url as string || "").replace(/\/$/, "");
 
-      // Also share the canvas directly in the channel for unfurling
+      const canvasUrl = `${workspaceUrl}docs/${canvasId}`;
+
       await client.apiCall("chat.postMessage", {
         channel: inputs.channel_id,
-        text: `https://slack.com/docs/${canvasId}`,
+        text: `:clipboard: *${canvasTitle}*\n\n${sectionSummary} · ${totalDeals} total deals\n\nCanvas is ready for leader input — please update your deal notes by EOD Thursday.\n\n<${canvasUrl}|Open Canvas>`,
       });
 
       return { outputs: { canvas_id: canvasId } };

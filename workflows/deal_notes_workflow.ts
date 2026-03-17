@@ -15,13 +15,8 @@ export const DealNotesWorkflow = DefineWorkflow({
         type: Schema.slack.types.channel_id,
         description: "Channel to post the canvas link in",
       },
-      google_access_token_id: {
-        type: Schema.slack.types.oauth2,
-        oauth2_provider_key: "google",
-        description: "Google OAuth2 token",
-      },
     },
-    required: ["channel_id", "google_access_token_id"],
+    required: ["channel_id"],
   },
 });
 
@@ -30,7 +25,7 @@ export const DealNotesWorkflow = DefineWorkflow({
 // ---------------------------------------------------------------------------
 DealNotesWorkflow.addStep(GenerateDealNotesFunction, {
   channel_id: DealNotesWorkflow.inputs.channel_id,
-  google_access_token_id: DealNotesWorkflow.inputs.google_access_token_id,
+  google_access_token_id: { credential_source: "DEVELOPER" },
 
   // ┌──────────────────────────────────────────────────────────────────────┐
   // │  UPDATE THESE TWO VALUES                                            │
