@@ -40,6 +40,6 @@ DealNotesWorkflow.addStep(GenerateDealNotesFunction, {
   // │                                                                     │
   // │  sheet_name      → the exact tab name where deal data lives         │
   // └──────────────────────────────────────────────────────────────────────┘
-  spreadsheet_id: "YOUR_SPREADSHEET_ID_HERE",
+  spreadsheet_id: "1RxghHl6maeyY38UieOPzJxuxhluGTBSes3k9Ye1JiHg",
   sheet_name: "Top Deals - Leader Inputs Needed",
 });
