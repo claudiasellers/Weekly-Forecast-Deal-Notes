@@ -293,6 +293,7 @@ function parseRows(rows: string[][]): DealSection[] {
 function buildCanvasMarkdown(
   sections: DealSection[],
   weekDate: string,
+  backToTopUrl?: string,
 ): string {
   const lines: string[] = [];
 
@@ -302,109 +303,59 @@ function buildCanvasMarkdown(
   lines.push("---");
   lines.push("");
 
-  // ---- TABLE OF CONTENTS ----
-  for (const section of sections) {
-    lines.push(`## ${section.sectionName}`);
-    lines.push("");
-    for (let i = 0; i < section.deals.length; i++) {
-      const deal = section.deals[i];
-      lines.push(`${i + 1}. **${deal.accountName}**`);
-    }
-    lines.push("");
-  }
-
-  lines.push("---");
-  lines.push("");
-
   // ---- DEAL CARDS ----
   for (const section of sections) {
     lines.push(`# ${section.sectionName}`);
     lines.push("");
 
     for (const deal of section.deals) {
-      // Account header
       lines.push(`## ${deal.accountName}`);
       lines.push("");
+      lines.push("---");
+      lines.push("");
 
-      // Pre-populated fields
-      if (deal.opportunity) {
-        lines.push(`**Opportunity:** ${deal.opportunity}`);
-      } else {
-        lines.push(`**Opportunity:**`);
-      }
-
-      if (deal.closeDate) {
-        lines.push(`**Close Date:** ${deal.closeDate}`);
-      } else {
-        lines.push(`**Close Date:**`);
-      }
-
-      if (deal.accountTeam) {
-        lines.push(`**Account Team:** ${deal.accountTeam}`);
-      } else {
-        lines.push(`**Account Team:**`);
-      }
-
-      // Financial summary line
+      lines.push(`**Opportunity:** ${deal.opportunity || ""}`);
+      lines.push("");
+      lines.push(`**Close Date:** ${deal.closeDate || ""}`);
+      lines.push("");
+      lines.push(`**Account Team:** ${deal.accountTeam || ""}`);
+      lines.push("");
       lines.push(
         `**On-Dash OP:** ${deal.onDashOP} | **IN:** ${deal.inValue} | **UP+:** ${deal.upPlus} | **UP-:** ${deal.upMinus} | **DC:** ${deal.dataCloud}`,
       );
-
+      lines.push("");
+      lines.push(`**Forecasted TCV:** ${deal.forecastedTCV || ""}`);
+      lines.push("");
+      lines.push(`**Products:** ${deal.products || ""}`);
+      lines.push("");
+      lines.push(`**Slack Channel:** ${deal.slackChannel || ""}`);
+      lines.push("");
+      lines.push(`**Risk/Confidence Level:** ${deal.riskConfidence || ""}`);
+      lines.push("");
+      lines.push(`**SCI Request:** ${deal.sciRequest || ""}`);
+      lines.push("");
+      lines.push("---");
       lines.push("");
 
-      // Fields that may be pre-populated or blank for leaders
-      if (deal.forecastedTCV) {
-        lines.push(`**Forecasted TCV:** ${deal.forecastedTCV}`);
-      } else {
-        lines.push(`**Forecasted TCV:**`);
-      }
-
-      if (deal.products) {
-        lines.push(`**Products:** ${deal.products}`);
-      } else {
-        lines.push(`**Products:**`);
-      }
-
-      if (deal.slackChannel) {
-        lines.push(`**Slack Channel:** ${deal.slackChannel}`);
-      } else {
-        lines.push(`**Slack Channel:**`);
-      }
-
-      if (deal.riskConfidence) {
-        lines.push(`**Risk/Confidence Level:** ${deal.riskConfidence}`);
-      } else {
-        lines.push(`**Risk/Confidence Level:**`);
-      }
-
-      if (deal.sciRequest) {
-        lines.push(`**SCI Request:** ${deal.sciRequest}`);
-      } else {
-        lines.push(`**SCI Request:**`);
-      }
-
-      lines.push("");
-
-      // Account Team Update / Recent Progress / Next Steps
-      lines.push("**Account Team Update:**");
+      lines.push(`**Account Team Update:** ${deal.lastUpdated || ""}`);
       lines.push("");
 
       if (deal.recentProgress) {
-        lines.push("**Recent Progress:**");
-        lines.push(deal.recentProgress);
+        lines.push(`**Recent Progress:** ${deal.recentProgress}`);
       } else {
         lines.push("**Recent Progress:**");
       }
-
       lines.push("");
 
       if (deal.nextSteps) {
         lines.push("**Next Steps:**");
+        lines.push("");
         lines.push(deal.nextSteps);
       } else {
         lines.push("**Next Steps:**");
       }
-
+      lines.push("");
+      lines.push("*Press Cmd + ↑ to return to top*");
       lines.push("");
       lines.push("---");
       lines.push("");
@@ -455,51 +406,94 @@ export default SlackFunction(
 
       const totalDeals = sections.reduce((n, s) => n + s.deals.length, 0);
 
-      // 4. Build the canvas markdown
       const now = new Date();
       const weekDate = now.toLocaleDateString("en-US", {
         month: "long",
         day: "numeric",
         year: "numeric",
       });
-      const markdown = buildCanvasMarkdown(sections, weekDate);
-
-      // 5. Create the Slack Canvas
       const canvasTitle = `TMT Deal Notes | Week of ${weekDate}`;
 
+      // 4. Get workspace info (needed for URLs)
+      const teamInfo = await client.apiCall("auth.test", {});
+      const workspaceUrl = (teamInfo.url as string || "").replace(/\/$/, "");
+      // In Enterprise Grid, team_id may return the org ID (E-prefix).
+      // We need the workspace team ID (T-prefix) for canvas URLs.
+      // Try team_id first, fall back to checking the URL for the team.
+      const teamId = (teamInfo.team_id as string || "").startsWith("T")
+        ? teamInfo.team_id as string
+        : "T06GXKG9745"; // workspace team ID
+      console.log("auth.test team_id:", teamInfo.team_id, "enterprise_id:", teamInfo.enterprise_id, "using:", teamId);
+
+      // 5. Create canvas with H3 "Back to Top" markers (no links yet)
+      const initialMarkdown = buildCanvasMarkdown(sections, weekDate);
       const canvasRes = await client.apiCall("canvases.create", {
         title: canvasTitle,
-        document_content: {
-          type: "markdown",
-          markdown: markdown,
-        },
+        document_content: { type: "markdown", markdown: initialMarkdown },
       });
 
       if (!canvasRes.ok) {
-        return {
-          error: `Failed to create canvas: ${canvasRes.error}`,
-        };
+        return { error: `Failed to create canvas: ${canvasRes.error}` };
       }
 
       const canvasId = canvasRes.canvas_id as string;
+      const canvasUrl = `${workspaceUrl}/docs/${teamId}/${canvasId}`;
 
-      // 6. Set canvas access for the channel
+      // 6. Look up H2 (deal names) for TOC jump links
+      const h2Lookup = await client.apiCall("canvases.sections.lookup", {
+        canvas_id: canvasId,
+        criteria: { section_types: ["h2"] },
+      });
+      const allH2s = (h2Lookup.sections || []) as { id: string }[];
+      console.log("H2s:", allH2s.length);
+
+      // 7. Insert TOC at start
+      try {
+        if (allH2s.length === totalDeals) {
+          const tocLines: string[] = [];
+          let dealIdx = 0;
+          for (const section of sections) {
+            tocLines.push(`### ${section.sectionName}`);
+            tocLines.push("");
+            for (let i = 0; i < section.deals.length; i++) {
+              const deal = section.deals[i];
+              const sectionId = allH2s[dealIdx]?.id;
+              if (sectionId) {
+                tocLines.push(`${i + 1}. [**${deal.accountName}**](${canvasUrl}?focus_section_id=${encodeURIComponent(sectionId)})`);
+              } else {
+                tocLines.push(`${i + 1}. **${deal.accountName}**`);
+              }
+              dealIdx++;
+            }
+            tocLines.push("");
+          }
+          tocLines.push("---");
+          tocLines.push("");
+
+          const tocRes = await client.apiCall("canvases.edit", {
+            canvas_id: canvasId,
+            changes: [{
+              operation: "insert_at_start",
+              document_content: { type: "markdown", markdown: tocLines.join("\n") },
+            }],
+          });
+          console.log("TOC insert ok:", tocRes.ok, "error:", tocRes.error);
+        }
+      } catch (linkErr) {
+        console.log("Jump link setup failed (non-fatal):", linkErr);
+      }
+
+      // 8. Set canvas access for the channel
       await client.apiCall("canvases.access.set", {
         canvas_id: canvasId,
         access_level: "write",
         channel_ids: [inputs.channel_id],
       });
 
-      // 7. Post the canvas link to the channel
+      // 9. Post the canvas link to the channel
       const sectionSummary = sections
         .map((s) => `${s.sectionName}: ${s.deals.length} deals`)
         .join(" · ");
-
-      // Get workspace URL for canvas link
-      const teamInfo = await client.apiCall("auth.test", {});
-      const workspaceUrl = (teamInfo.url as string || "").replace(/\/$/, "");
-
-      const canvasUrl = `${workspaceUrl}docs/${canvasId}`;
 
       await client.apiCall("chat.postMessage", {
         channel: inputs.channel_id,

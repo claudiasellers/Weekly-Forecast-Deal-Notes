@@ -23,6 +23,7 @@ export default Manifest({
     "commands",
     "chat:write",
     "chat:write.public",
+    "canvases:read",
     "canvases:write",
   ],
 });
