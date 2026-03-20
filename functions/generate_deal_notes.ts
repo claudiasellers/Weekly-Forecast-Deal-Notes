@@ -309,7 +309,7 @@ function buildCanvasMarkdown(
     lines.push("");
 
     for (const deal of section.deals) {
-      lines.push(`## ${deal.accountName}`);
+      lines.push(`## :arrow_right: ${deal.accountName}`);
       lines.push("");
       lines.push("---");
       lines.push("");
