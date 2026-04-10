@@ -24,7 +24,7 @@ const ScheduledTrigger: Trigger<typeof DealNotesWorkflow.definition> = {
     // │  UPDATE THIS to your actual Slack channel ID        │
     // │  e.g. "C0123456789"                                 │
     // └─────────────────────────────────────────────────────┘
-    channel_id: { value: "C06K7BP34AD" },
+    channel_id: { value: "C0ARH0VS1MH" },
   },
   schedule: {
     // First run — set to the next upcoming Thursday

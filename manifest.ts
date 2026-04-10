@@ -22,7 +22,6 @@ export default Manifest({
   botScopes: [
     "commands",
     "chat:write",
-    "chat:write.public",
     "canvases:read",
     "canvases:write",
   ],

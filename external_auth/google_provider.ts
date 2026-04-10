@@ -20,7 +20,7 @@ const GoogleProvider = DefineOAuth2Provider({
     provider_name: "Google",
     authorization_url: "https://accounts.google.com/o/oauth2/auth",
     token_url: "https://oauth2.googleapis.com/token",
-    client_id: "724902613772-5udb85ped6c3l38un9h8a778fks3sto5.apps.googleusercontent.com",
+    client_id: "622898876476-961cb3l7612sm4sn8ln7pjk03ljd64an.apps.googleusercontent.com",
     scope: [
       "openid",
       "https://www.googleapis.com/auth/userinfo.email",

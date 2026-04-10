@@ -49,7 +49,6 @@ export const GenerateDealNotesFunction = DefineFunction({
 interface DealRow {
   rank: string;
   accountName: string;
-  topDeals: string;
   closeDate: string;
   concat: string;
   lastUpdated: string;
@@ -187,7 +186,6 @@ function parseConcat(concat: string): {
 const COL = {
   RANK: 1,           // B
   ACCOUNT_NAME: 2,   // C
-  TOP_DEALS: 3,      // D (may not exist — adjust as needed)
   CLOSE_DATE: 4,     // E — or pulled from Concat
   CONCAT: 13,        // N
   LAST_UPDATED: 14,  // O — adjust based on actual position
@@ -196,10 +194,10 @@ const COL = {
   RECENT_PROGRESS: 17, // R
   NEXT_STEPS: 18,    // S
   // Add more as needed for columns to the right:
-  FORECASTED_TCV: -1,    // set to actual index if present, -1 = not in sheet
-  SLACK_CHANNEL: -1,
-  RISK_CONFIDENCE: -1,
-  SCI_REQUEST: -1,
+  RISK_CONFIDENCE: 19,   // T
+  FORECASTED_TCV: 20,    // U
+  SCI_REQUEST: 21,       // V
+  SLACK_CHANNEL: 22,     // W
 };
 
 function isSectionHeaderRow(row: string[]): boolean {
@@ -255,7 +253,6 @@ function parseRows(rows: string[][]): DealSection[] {
       const deal: DealRow = {
         rank: cell(COL.RANK),
         accountName: cell(COL.ACCOUNT_NAME),
-        topDeals: cell(COL.TOP_DEALS),
         closeDate: parsed.closeDate || cell(COL.CLOSE_DATE),
         concat: cell(COL.CONCAT),
         lastUpdated: cell(COL.LAST_UPDATED),
@@ -288,12 +285,33 @@ function parseRows(rows: string[][]): DealSection[] {
 }
 
 // ---------------------------------------------------------------------------
+// Link helpers
+// ---------------------------------------------------------------------------
+const URL_REGEX = /https?:\/\/[^\s)]+/gi;
+
+/**
+ * Format a Slack Channel cell that may contain a channel name and/or a URL
+ * (possibly on separate lines) into a markdown hyperlink.
+ */
+function formatSlackChannelCell(value: string): string {
+  if (!value) return "";
+  const urlMatch = value.match(URL_REGEX);
+  if (!urlMatch) return value;
+  const url = urlMatch[0];
+  // Remove the URL from the cell to find any label text (e.g. channel name)
+  const label = value.replace(url, "").replace(/\s+/g, " ").trim();
+  if (label) return `[${label}](${url})`;
+  // Fall back to #channelID derived from the archive URL
+  const channelId = url.match(/\/archives\/([A-Z0-9]+)/i)?.[1];
+  return channelId ? `[#${channelId}](${url})` : `[${url}](${url})`;
+}
+
+// ---------------------------------------------------------------------------
 // Markdown builder
 // ---------------------------------------------------------------------------
 function buildCanvasMarkdown(
   sections: DealSection[],
   weekDate: string,
-  backToTopUrl?: string,
 ): string {
   const lines: string[] = [];
 
@@ -309,7 +327,7 @@ function buildCanvasMarkdown(
     lines.push("");
 
     for (const deal of section.deals) {
-      lines.push(`## :arrow_right: ${deal.accountName}`);
+      lines.push(`## :deal-937: ${deal.accountName}`);
       lines.push("");
       lines.push("---");
       lines.push("");
@@ -328,7 +346,7 @@ function buildCanvasMarkdown(
       lines.push("");
       lines.push(`**Products:** ${deal.products || ""}`);
       lines.push("");
-      lines.push(`**Slack Channel:** ${deal.slackChannel || ""}`);
+      lines.push(`**Slack Channel:** ${formatSlackChannelCell(deal.slackChannel)}`);
       lines.push("");
       lines.push(`**Risk/Confidence Level:** ${deal.riskConfidence || ""}`);
       lines.push("");
@@ -355,7 +373,7 @@ function buildCanvasMarkdown(
         lines.push("**Next Steps:**");
       }
       lines.push("");
-      lines.push("*Press Cmd + ↑ to return to top*");
+      lines.push("*Press Cmd + ↑ / Ctrl + Home to return to top*");
       lines.push("");
       lines.push("---");
       lines.push("");

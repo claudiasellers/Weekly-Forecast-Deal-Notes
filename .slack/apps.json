@@ -5,6 +5,12 @@
       "enterprise_id": "E06H2VDU676",
       "team_domain": "slack-demo-7097",
       "team_id": "E06H2VDU676"
+    },
+    "E7T5PNK3P": {
+      "app_id": "A0AN3BX0M7Z",
+      "enterprise_id": "E7T5PNK3P",
+      "team_domain": "salesforce",
+      "team_id": "E7T5PNK3P"
     }
   },
   "default": "slack-demo-7097"
