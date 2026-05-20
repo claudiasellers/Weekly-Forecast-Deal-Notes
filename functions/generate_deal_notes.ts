@@ -132,22 +132,38 @@ function parseConcat(concat: string): {
 
   if (!concat) return defaults;
 
-  // Split on pipe — left side is team, right side is financials
-  const pipeParts = concat.split("|");
-  const teamPart = pipeParts[0]?.trim() ?? "";
-  const financialPart = pipeParts.slice(1).join("|").trim();
+  // Format (pipe-delimited):
+  //   "<Account>, Account Team: Name1 | Name2 | Name3 | Name4 | On-Dash OP: $X
+  //    | IN: $X | UP+: $X | UP- : $X | Data Cloud OP: $X, Close Date: MM/DD/YYYY"
 
-  // Extract team names from the team part
-  // Pattern: "Direct: Name, Direct+1: Name, Direct+2: Name"
-  const teamEntries: string[] = [];
-  const teamRegex = /(Direct(?:\+\d)?)\s*:\s*([^,|]+)/gi;
-  let match;
-  while ((match = teamRegex.exec(teamPart)) !== null) {
-    teamEntries.push(`${match[1].trim()}: ${match[2].trim()}`);
+  // Two supported team formats:
+  //   (A) "Account Team: Name1 | Name2 | Name3 | Name4 | On-Dash OP: ..."
+  //   (B) "Direct: Name, Direct+1: Name, Direct+2: Name | On-Dash OP: ..."
+  let accountTeam = "";
+
+  const teamMatch = concat.match(
+    /Account Team\s*:\s*([\s\S]*?)(?=\s*\|\s*(?:On-Dash OP|IN|UP\+|UP-|Data Cloud)\b|,\s*Close Date\b|$)/i,
+  );
+  if (teamMatch) {
+    accountTeam = teamMatch[1]
+      .split("|")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .join(", ");
+  } else {
+    // Fallback: old "Direct: …, Direct+1: …, Direct+2: …" format.
+    // Team entries live before the first pipe; financials live after.
+    const teamPart = concat.split("|")[0] ?? "";
+    const teamEntries: string[] = [];
+    const teamRegex = /(Direct(?:\+\d)?)\s*:\s*([^,|]+)/gi;
+    let m;
+    while ((m = teamRegex.exec(teamPart)) !== null) {
+      teamEntries.push(`${m[1].trim()}: ${m[2].trim()}`);
+    }
+    accountTeam = teamEntries.join(", ");
   }
-  const accountTeam = teamEntries.join(", ");
 
-  // Extract financial values
+  // Extract financial values from the full concat string.
   const extract = (label: string, text: string): string => {
     const escaped = label.replace(/[+\-]/g, "\\$&");
     const re = new RegExp(`${escaped}\\s*:\\s*(\\$[\\d.,]+[MmKkBb]?)`, "i");
@@ -155,17 +171,16 @@ function parseConcat(concat: string): {
     return m ? m[1] : "$0.0M";
   };
 
-  const closeDateMatch = financialPart.match(
-    /Close\s*Date\s*:\s*([\d/\-]+)/i,
-  );
+  const closeDateMatch = concat.match(/Close\s*Date\s*:\s*([\d/\-]+)/i);
 
   return {
     accountTeam,
-    onDashOP: extract("On-Dash OP", financialPart),
-    inValue: extract("IN", financialPart),
-    upPlus: extract("UP\\+", financialPart),
-    upMinus: extract("UP-", financialPart),
-    dataCloud: extract("Data Cloud", financialPart),
+    onDashOP: extract("On-Dash OP", concat),
+    inValue: extract("IN", concat),
+    upPlus: extract("UP\\+", concat),
+    upMinus: extract("UP-", concat),
+    // Match either "Data Cloud OP" or "Data Cloud"
+    dataCloud: extract("Data Cloud(?: OP)?", concat),
     closeDate: closeDateMatch ? closeDateMatch[1] : "",
   };
 }
@@ -284,6 +299,27 @@ function parseRows(rows: string[][]): DealSection[] {
 }
 
 // ---------------------------------------------------------------------------
+// Markdown sanitization
+// ---------------------------------------------------------------------------
+/**
+ * Sanitize free-text from the sheet before embedding in Canvas markdown.
+ * Slack Canvas rejects the whole document with "Unsupported input" if a
+ * stray `|` appears outside a table context, so we escape it. We also strip
+ * zero-width characters and control chars that can sneak in via copy-paste.
+ */
+function sanitizeForMarkdown(value: string): string {
+  if (!value) return "";
+  return value
+    // Remove zero-width and most non-printable control chars (keep \n, \t)
+    // deno-lint-ignore no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F​-‍﻿]/g, "")
+    // Replace pipes — Slack Canvas's parser treats `|` as a table delimiter
+    // and rejects the whole document if it appears outside a table context.
+    // Backslash-escape is not honored, so substitute a visually similar char.
+    .replace(/\|/g, "/");
+}
+
+// ---------------------------------------------------------------------------
 // Link helpers
 // ---------------------------------------------------------------------------
 const URL_REGEX = /https?:\/\/[^\s)]+/gi;
@@ -295,14 +331,41 @@ const URL_REGEX = /https?:\/\/[^\s)]+/gi;
 function formatSlackChannelCell(value: string): string {
   if (!value) return "";
   const urlMatch = value.match(URL_REGEX);
-  if (!urlMatch) return value;
+  if (!urlMatch) return sanitizeForMarkdown(value);
   const url = urlMatch[0];
   // Remove the URL from the cell to find any label text (e.g. channel name)
-  const label = value.replace(url, "").replace(/\s+/g, " ").trim();
+  const rawLabel = value.replace(url, "").replace(/\s+/g, " ").trim();
+  const label = sanitizeForMarkdown(rawLabel).replace(/[\[\]]/g, "");
   if (label) return `[${label}](${url})`;
   // Fall back to #channelID derived from the archive URL
   const channelId = url.match(/\/archives\/([A-Z0-9]+)/i)?.[1];
   return channelId ? `[#${channelId}](${url})` : `[${url}](${url})`;
+}
+
+/**
+ * Format a cell that may contain free text AND one or more URLs into a safe
+ * markdown string. Bare URLs in Canvas markdown can trip the parser (especially
+ * Slack archive URLs with `&` query params), so each URL is collapsed into a
+ * proper `[label](url)` markdown link. All remaining text is kept inline and
+ * sanitized.
+ */
+function formatCellWithLinks(value: string): string {
+  if (!value) return "";
+  // Collapse internal whitespace (preserve paragraph breaks as single spaces
+  // for the label-adjacent inline format used in deal cards).
+  const compact = value.replace(/\s+/g, " ").trim();
+  const urls = compact.match(URL_REGEX);
+  if (!urls || urls.length === 0) return sanitizeForMarkdown(compact);
+  let remaining = compact;
+  let linkSuffix = "";
+  for (const url of urls) {
+    remaining = remaining.replace(url, "").replace(/\s+/g, " ").trim();
+    const channelId = url.match(/\/archives\/([A-Z0-9]+)/i)?.[1];
+    const label = channelId ? `#${channelId}` : "link";
+    linkSuffix += ` [${label}](${url})`;
+  }
+  const cleaned = sanitizeForMarkdown(remaining).replace(/[\[\]]/g, "");
+  return cleaned ? `${cleaned}${linkSuffix}` : linkSuffix.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +378,7 @@ function buildCanvasMarkdown(
   const lines: string[] = [];
 
   // Title
-  lines.push(`# TMT Deal Notes | Week of ${weekDate}`);
+  lines.push(`# TMT Deal Notes — Week of ${weekDate}`);
   lines.push("");
   lines.push("---");
   lines.push("");
@@ -326,39 +389,39 @@ function buildCanvasMarkdown(
     lines.push("");
 
     for (const deal of section.deals) {
-      lines.push(`## :deal-937: ${deal.accountName}`);
+      lines.push(`## :deal-937: ${sanitizeForMarkdown(deal.accountName)}`);
       lines.push("");
       lines.push("---");
       lines.push("");
 
-      lines.push(`**Opportunity:** ${deal.opportunity || ""}`);
+      lines.push(`**Opportunity:** ${sanitizeForMarkdown(deal.opportunity || "")}`);
       lines.push("");
-      lines.push(`**Close Date:** ${deal.closeDate || ""}`);
+      lines.push(`**Close Date:** ${sanitizeForMarkdown(deal.closeDate || "")}`);
       lines.push("");
-      lines.push(`**Account Team:** ${deal.accountTeam || ""}`);
+      lines.push(`**Account Team:** ${sanitizeForMarkdown(deal.accountTeam || "")}`);
       lines.push("");
       lines.push(
-        `**On-Dash OP:** ${deal.onDashOP} | **IN:** ${deal.inValue} | **UP+:** ${deal.upPlus} | **UP-:** ${deal.upMinus} | **DC:** ${deal.dataCloud}`,
+        `**On-Dash OP:** ${deal.onDashOP} · **IN:** ${deal.inValue} · **UP+:** ${deal.upPlus} · **UP-:** ${deal.upMinus} · **DC:** ${deal.dataCloud}`,
       );
       lines.push("");
-      lines.push(`**Forecasted TCV:** ${deal.forecastedTCV || ""}`);
+      lines.push(`**Forecasted TCV:** ${sanitizeForMarkdown(deal.forecastedTCV || "")}`);
       lines.push("");
-      lines.push(`**Products:** ${deal.products || ""}`);
+      lines.push(`**Products:** ${sanitizeForMarkdown(deal.products || "")}`);
       lines.push("");
       lines.push(`**Slack Channel:** ${formatSlackChannelCell(deal.slackChannel)}`);
       lines.push("");
-      lines.push(`**Risk/Confidence Level:** ${deal.riskConfidence || ""}`);
+      lines.push(`**Risk/Confidence Level:** ${sanitizeForMarkdown(deal.riskConfidence || "")}`);
       lines.push("");
-      lines.push(`**SCI Request:** ${deal.sciRequest || ""}`);
+      lines.push(`**SCI Request:** ${formatCellWithLinks(deal.sciRequest || "")}`);
       lines.push("");
       lines.push("---");
       lines.push("");
 
-      lines.push(`**Account Team Update:** ${deal.lastUpdated || ""}`);
+      lines.push(`**Account Team Update:** ${sanitizeForMarkdown(deal.lastUpdated || "")}`);
       lines.push("");
 
       if (deal.recentProgress) {
-        lines.push(`**Recent Progress:** ${deal.recentProgress}`);
+        lines.push(`**Recent Progress:** ${sanitizeForMarkdown(deal.recentProgress)}`);
       } else {
         lines.push("**Recent Progress:**");
       }
@@ -367,7 +430,7 @@ function buildCanvasMarkdown(
       if (deal.nextSteps) {
         lines.push("**Next Steps:**");
         lines.push("");
-        lines.push(deal.nextSteps);
+        lines.push(sanitizeForMarkdown(deal.nextSteps));
       } else {
         lines.push("**Next Steps:**");
       }
@@ -380,6 +443,46 @@ function buildCanvasMarkdown(
   }
 
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Canvas API access control
+// ---------------------------------------------------------------------------
+// Required by Slack App approval: every canvas read/write API call is routed
+// through this wrapper, which extracts the canvas_id from the request params
+// and validates it against the authorized ID returned by canvases.create.
+// If the canvas_id is missing or does not match, the call is rejected before
+// it reaches the Slack API.
+// ---------------------------------------------------------------------------
+// deno-lint-ignore require-await
+async function canvasApiCall(
+  // deno-lint-ignore no-explicit-any
+  client: { apiCall: (method: string, params: Record<string, unknown>) => Promise<any> },
+  method: string,
+  authorizedCanvasId: string,
+  params: Record<string, unknown>,
+  // deno-lint-ignore no-explicit-any
+): Promise<any> {
+  const targetCanvasId = params.canvas_id;
+  if (!targetCanvasId) {
+    throw new Error(
+      `Canvas access denied [${method}]: canvas_id parameter is missing.`,
+    );
+  }
+  if (typeof targetCanvasId !== "string") {
+    throw new Error(
+      `Canvas access denied [${method}]: canvas_id is not a string.`,
+    );
+  }
+  if (targetCanvasId !== authorizedCanvasId) {
+    throw new Error(
+      `Canvas access denied [${method}]: ` +
+      `canvas_id "${targetCanvasId}" does not match the authorized Canvas ` +
+      `"${authorizedCanvasId}" created in this execution. ` +
+      `Rejecting operation to prevent unintended Canvas access.`,
+    );
+  }
+  return client.apiCall(method, params);
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +526,51 @@ export default SlackFunction(
 
       const totalDeals = sections.reduce((n, s) => n + s.deals.length, 0);
 
+      // TEMP DIAGNOSTIC: scan every deal field for chars that commonly trip
+      // Slack's canvas markdown parser ("Unsupported input").
+      {
+        const suspiciousPatterns: [string, RegExp][] = [
+          // deno-lint-ignore no-control-regex
+          ["control char", /[\x00-\x08\x0B\x0C\x0E-\x1F]/],
+          ["zero-width", /[​-‍﻿]/],
+          ["html-like tag", /<\/?[a-zA-Z][^>]*>/],
+          ["backtick", /`/],
+          ["unbalanced paren", /\([^)]*$|^[^(]*\)/],
+          ["unbalanced bracket", /\[[^\]]*$|^[^\[]*\]/],
+          ["pipe char", /\|/],
+          ["stray lone backslash", /\\[^\\nrt"'`]/],
+        ];
+        let dealIdx = 0;
+        for (const section of sections) {
+          for (const deal of section.deals) {
+            const fields: [string, string][] = [
+              ["accountName", deal.accountName],
+              ["opportunity", deal.opportunity],
+              ["products", deal.products],
+              ["recentProgress", deal.recentProgress],
+              ["nextSteps", deal.nextSteps],
+              ["slackChannel", deal.slackChannel],
+              ["riskConfidence", deal.riskConfidence],
+              ["sciRequest", deal.sciRequest],
+              ["accountTeam", deal.accountTeam],
+              ["lastUpdated", deal.lastUpdated],
+            ];
+            for (const [fieldName, value] of fields) {
+              if (!value) continue;
+              for (const [label, re] of suspiciousPatterns) {
+                const m = value.match(re);
+                if (m) {
+                  console.log(
+                    `[scan] deal#${dealIdx} "${deal.accountName}" field=${fieldName} issue=${label} snippet=${JSON.stringify(value.slice(Math.max(0, (m.index ?? 0) - 20), (m.index ?? 0) + 40))}`,
+                  );
+                }
+              }
+            }
+            dealIdx++;
+          }
+        }
+      }
+
       const now = new Date();
       const weekDate = now.toLocaleDateString("en-US", {
         month: "long",
@@ -443,24 +591,52 @@ export default SlackFunction(
       console.log("auth.test team_id:", teamInfo.team_id, "enterprise_id:", teamInfo.enterprise_id, "using:", teamId);
 
       // 5. Create canvas with H3 "Back to Top" markers (no links yet)
+      // TEMP DIAGNOSTIC: try creating a trivial canvas first to isolate
+      // whether canvases.create works AT ALL for this app in this workspace.
+      const probe = await client.apiCall("canvases.create", {
+        title: `Probe canvas ${Date.now()}`,
+        document_content: { type: "markdown", markdown: "# Probe\n\nHello world." },
+      });
+      console.log("probe canvases.create response:", JSON.stringify(probe));
+
       const initialMarkdown = buildCanvasMarkdown(sections, weekDate);
+      console.log("canvas markdown length:", initialMarkdown.length, "totalDeals:", totalDeals);
+      // Log first 400 and last 400 chars of what we're sending to Slack
+      console.log("markdown head:", JSON.stringify(initialMarkdown.slice(0, 400)));
+      console.log("markdown tail:", JSON.stringify(initialMarkdown.slice(-400)));
+      // Log count of pipes to verify sanitizer ran
+      const pipeCount = (initialMarkdown.match(/\|/g) || []).length;
+      console.log("pipe count in final markdown:", pipeCount);
       const canvasRes = await client.apiCall("canvases.create", {
         title: canvasTitle,
         document_content: { type: "markdown", markdown: initialMarkdown },
       });
 
       if (!canvasRes.ok) {
-        return { error: `Failed to create canvas: ${canvasRes.error}` };
+        console.log("canvases.create full response:", JSON.stringify(canvasRes));
+        const extra = (canvasRes.response_metadata as { messages?: string[] } | undefined)?.messages;
+        return {
+          error: `Failed to create canvas: ${canvasRes.error}` +
+            (extra ? ` | messages: ${extra.join(" ; ")}` : ""),
+        };
       }
 
       const canvasId = canvasRes.canvas_id as string;
+      // Sealed single source of truth for the Canvas created in this execution.
+      // Captured exactly once from the canvases.create response, never
+      // reassigned, and not reachable from any external input. This is the
+      // value that every subsequent canvases:read / canvases:write call is
+      // checked against inside canvasApiCall — the wrapper compares the
+      // canvas_id on the outgoing request payload to AUTHORIZED_CANVAS_ID and
+      // rejects the call if they differ.
+      const AUTHORIZED_CANVAS_ID: string = canvasId;
       const canvasUrl = `${workspaceUrl}/docs/${teamId}/${canvasId}`;
 
       // 6. Look up H2 (deal names) for TOC jump links
-      const h2Lookup = await client.apiCall("canvases.sections.lookup", {
-        canvas_id: canvasId,
-        criteria: { section_types: ["h2"] },
-      });
+      const h2Lookup = await canvasApiCall(
+        client, "canvases.sections.lookup", AUTHORIZED_CANVAS_ID,
+        { canvas_id: canvasId, criteria: { section_types: ["h2"] } },
+      );
       const allH2s = (h2Lookup.sections || []) as { id: string }[];
       console.log("H2s:", allH2s.length);
 
@@ -487,13 +663,16 @@ export default SlackFunction(
           tocLines.push("---");
           tocLines.push("");
 
-          const tocRes = await client.apiCall("canvases.edit", {
-            canvas_id: canvasId,
-            changes: [{
-              operation: "insert_at_start",
-              document_content: { type: "markdown", markdown: tocLines.join("\n") },
-            }],
-          });
+          const tocRes = await canvasApiCall(
+            client, "canvases.edit", AUTHORIZED_CANVAS_ID,
+            {
+              canvas_id: canvasId,
+              changes: [{
+                operation: "insert_at_start",
+                document_content: { type: "markdown", markdown: tocLines.join("\n") },
+              }],
+            },
+          );
           console.log("TOC insert ok:", tocRes.ok, "error:", tocRes.error);
         }
       } catch (linkErr) {
@@ -501,11 +680,14 @@ export default SlackFunction(
       }
 
       // 8. Set canvas access for the channel
-      await client.apiCall("canvases.access.set", {
-        canvas_id: canvasId,
-        access_level: "write",
-        channel_ids: [inputs.channel_id],
-      });
+      await canvasApiCall(
+        client, "canvases.access.set", AUTHORIZED_CANVAS_ID,
+        {
+          canvas_id: canvasId,
+          access_level: "write",
+          channel_ids: [inputs.channel_id],
+        },
+      );
 
       // 9. Post the canvas link to the channel
       const sectionSummary = sections
