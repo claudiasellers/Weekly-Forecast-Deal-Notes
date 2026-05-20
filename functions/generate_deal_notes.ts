@@ -1,5 +1,4 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
-import GoogleProvider from "../external_auth/google_provider.ts";
 
 // ---------------------------------------------------------------------------
 // Function definition

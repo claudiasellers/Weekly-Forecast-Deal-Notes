@@ -1,5 +1,5 @@
 import { Trigger } from "deno-slack-api/types.ts";
-import { TriggerContextData, TriggerTypes } from "deno-slack-api/mod.ts";
+import { TriggerTypes } from "deno-slack-api/mod.ts";
 import { DealNotesWorkflow } from "../workflows/deal_notes_workflow.ts";
 
 /**
